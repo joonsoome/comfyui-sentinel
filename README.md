@@ -151,7 +151,9 @@ You can:
 
 If your client cannot set headers/cookies, use the Sentinel bridge endpoint and embed the token in JSON.
 
-**Endpoint:** `POST /api/prompt_with_token`
+**Endpoint:** `POST /token/prompt`
+
+- RisuAI URL: `<baseurl>/token</prompt>` (ex: `https://example.com/token`)
 
 **Request Body (top-level token):**
 ```json
