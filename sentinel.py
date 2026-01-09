@@ -1,8 +1,11 @@
 import os
 import jwt
 import uuid
+import time
+import logging
 from aiohttp import web
 
+import execution
 from server import PromptServer
 
 from .utils import *
@@ -20,6 +23,36 @@ access_control = AccessControl(users_db, instance)
 jwt_auth = JWTAuth(
     users_db, access_control, logger, SECRET_KEY, TOKEN_EXPIRE_MINUTES, TOKEN_ALGORITHM
 )
+
+def extract_jwt_token(request: web.Request, json_data: dict) -> str | None:
+    """Extract JWT from Authorization header/cookie, top-level, or extra_data."""
+    header_token = jwt_auth.get_token_from_request(request)
+    if header_token:
+        return header_token
+
+    if isinstance(json_data, dict):
+        token = json_data.get("jwt_token")
+        if token:
+            return token
+
+        extra_data = json_data.get("extra_data")
+        if isinstance(extra_data, dict):
+            return extra_data.get("jwt_token")
+
+    return None
+
+
+def strip_jwt_token(json_data: dict) -> dict:
+    """Remove jwt_token from known locations so it never persists."""
+    if not isinstance(json_data, dict):
+        return json_data
+
+    json_data.pop("jwt_token", None)
+    extra_data = json_data.get("extra_data")
+    if isinstance(extra_data, dict):
+        extra_data.pop("jwt_token", None)
+
+    return json_data
 
 
 @routes.get("/register")
@@ -212,6 +245,85 @@ async def post_generate_token(request: web.Request) -> web.Response:
     timeout.add_failed_attempt(ip)
     return web.json_response({"error": "Invalid username or password"}, status=401)
 
+@routes.post("/api/prompt_with_token")
+async def post_prompt_with_token(request: web.Request) -> web.Response:
+    try:
+        json_data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON payload"}, status=400)
+
+    token = extract_jwt_token(request, json_data)
+    if not token:
+        return web.json_response({"error": "Authentication required"}, status=401)
+
+    try:
+        user = jwt_auth.decode_access_token(token)
+        user_id = user.get("id")
+        username = user.get("username")
+        if not user_id or not username:
+            raise ValueError("Missing user data in token")
+        if users_db.get_user(username)[0] != user_id:
+            raise ValueError("User is not in the database")
+    except jwt.ExpiredSignatureError:
+        return web.json_response({"error": "Token has expired"}, status=401)
+    except jwt.InvalidTokenError:
+        return web.json_response({"error": "Token is invalid"}, status=401)
+    except Exception as e:
+        logger.error(f"Unexpected error during token decoding: {e}")
+        return web.json_response({"error": "Unexpected error"}, status=401)
+
+    request["user_id"] = user_id
+    request["user"] = username
+    access_control.set_current_user_id(user_id, set_fallback=True)
+
+    json_data = strip_jwt_token(json_data)
+    json_data = instance.trigger_on_prompt(json_data)
+    json_data = strip_jwt_token(json_data)
+
+    if "number" in json_data:
+        number = float(json_data["number"])
+    else:
+        number = instance.number
+        if json_data.get("front"):
+            number = -number
+        instance.number += 1
+
+    if "prompt" not in json_data:
+        error = {
+            "type": "no_prompt",
+            "message": "No prompt provided",
+            "details": "No prompt provided",
+            "extra_info": {},
+        }
+        return web.json_response({"error": error, "node_errors": {}}, status=400)
+
+    prompt = json_data["prompt"]
+    prompt_id = str(json_data.get("prompt_id", uuid.uuid4()))
+
+    partial_execution_targets = json_data.get("partial_execution_targets")
+
+    valid = await execution.validate_prompt(prompt_id, prompt, partial_execution_targets)
+    extra_data = json_data.get("extra_data", {})
+
+    if "client_id" in json_data:
+        extra_data["client_id"] = json_data["client_id"]
+
+    if valid[0]:
+        outputs_to_execute = valid[2]
+        sensitive = {}
+        for sensitive_val in execution.SENSITIVE_EXTRA_DATA_KEYS:
+            if sensitive_val in extra_data:
+                sensitive[sensitive_val] = extra_data.pop(sensitive_val)
+        extra_data["create_time"] = int(time.time() * 1000)
+        instance.prompt_queue.put(
+            (number, prompt_id, prompt, extra_data, outputs_to_execute, sensitive)
+        )
+        response = {"prompt_id": prompt_id, "number": number, "node_errors": valid[3]}
+        return web.json_response(response)
+
+    logging.warning("invalid prompt: {}".format(valid[1]))
+    return web.json_response({"error": valid[1], "node_errors": valid[3]}, status=400)
+
 
 @routes.get("/logout")
 async def get_logout(request: web.Request) -> web.Response:
@@ -275,7 +387,13 @@ app.middlewares.append(
 )
 app.middlewares.append(
     jwt_auth.create_jwt_middleware(
-        public=("/login", "/logout", "/register", "/generate_token"),
+        public=(
+            "/login",
+            "/logout",
+            "/register",
+            "/generate_token",
+            "/api/prompt_with_token",
+        ),
         public_prefixes=("/sentinel"),
     )
 )
