@@ -245,8 +245,8 @@ async def post_generate_token(request: web.Request) -> web.Response:
     timeout.add_failed_attempt(ip)
     return web.json_response({"error": "Invalid username or password"}, status=401)
 
-@routes.post("/api/prompt_with_token")
-async def post_prompt_with_token(request: web.Request) -> web.Response:
+@routes.post("/token/prompt")
+async def post_token_prompt(request: web.Request) -> web.Response:
     try:
         json_data = await request.json()
     except Exception:
@@ -392,7 +392,7 @@ app.middlewares.append(
             "/logout",
             "/register",
             "/generate_token",
-            "/api/prompt_with_token",
+            "/token/prompt",
         ),
         public_prefixes=("/sentinel"),
     )
