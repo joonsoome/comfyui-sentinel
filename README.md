@@ -147,6 +147,40 @@ You can:
 - Include the authentication token in headers: `Authorization: Bearer eyJhbGci...`
 - Include it as a cookie named `jwt_token` in the request.
 
+### Workflow Submission (API JSON)
+
+If your client cannot set headers/cookies, use the Sentinel bridge endpoint and embed the token in JSON.
+
+**Endpoint:** `POST /api/prompt_with_token`
+
+**Request Body (top-level token):**
+```json
+{
+  "prompt": { "...": "API-format workflow JSON" },
+  "client_id": "optional-client-id",
+  "jwt_token": "eyJhbGci..."
+}
+```
+
+**Request Body (extra_data token):**
+```json
+{
+  "prompt": { "...": "API-format workflow JSON" },
+  "extra_data": {
+    "jwt_token": "eyJhbGci..."
+  }
+}
+```
+
+**Request Headers (optional):**
+```
+Authorization: Bearer eyJhbGci...
+```
+
+Notes:
+- `jwt_token` is removed before forwarding to `/prompt` and will not be stored in queue/history.
+- If you can set headers, you can call `POST /prompt` directly with `Authorization: Bearer <token>`.
+
 ### Register
 
 **Endpoint:**  `POST /register`
