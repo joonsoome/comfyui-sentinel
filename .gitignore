@@ -1,0 +1,10 @@
+# Python bytecode / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+sentinel.log
+
+# Local data (do not commit)
+users_db.json
